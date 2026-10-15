@@ -111,16 +111,111 @@ function applyState(s){
   S.chefs = Math.min(3, Math.max(1, Math.floor(+S.chefs) || 1)); S.waiters = Math.min(3, Math.max(1, Math.floor(+S.waiters) || 1));
   S.lot = Math.min(17, Math.max(+S.lot || 0, S.N, 9));
   customers = []; orders = []; held = null;
-  S.items = S.items.filter(it => it && ITEMS[it.t] && Number.isInteger(it.x) && Number.isInteger(it.y) && it.x >= 0 && it.y >= 0 && it.x < S.lot && it.y < S.lot).map(it => ({t:it.t, x:it.x, y:it.y, r:it.r||0, id:uid++, coins:0, coinT:0}));
+  const byIndex = [];   // saved item index -> live item, for the people and orders that point at furniture
+  S.items = S.items.map((it, i) => {
+    if (!(it && ITEMS[it.t] && Number.isInteger(it.x) && Number.isInteger(it.y) && it.x >= 0 && it.y >= 0 && it.x < S.lot && it.y < S.lot)) return null;
+    const n = {t:it.t, x:it.x, y:it.y, r:it.r||0, id:uid++, coins:Math.max(0, Math.floor(+it.c) || 0), coinT:0};
+    byIndex[i] = n; return n;
+  }).filter(Boolean);
   if (!FLOORS[S.floor]) S.floor = "ajedrez";
   if (!WALLS[S.wall]) S.wall = "ladrillo";
   S.lot = Math.max(S.lot || 0, S.N, 9); N = S.N; LOT = S.lot; rebuildOcc();
   staff = [];
   for (let i=0;i<S.chefs;i++) addStaff("chef");
   for (let i=0;i<S.waiters;i++) addStaff("waiter");
+  const live = S.live; delete S.live;
+  if (live) try { restoreLive(live, byIndex); } catch(e) { customers = []; orders = []; for (const it of S.items){ it.res = null; it.cooking = null; } }
 }
 function serialize(){
-  return {S:Object.assign({}, S, {items:S.items.map(i => ({t:i.t,x:i.x,y:i.y,r:i.r}))})};
+  return {S:Object.assign({}, S, {items:S.items.map(i => i.coins > 0 ? {t:i.t,x:i.x,y:i.y,r:i.r,c:i.coins} : {t:i.t,x:i.x,y:i.y,r:i.r}), live:snapshotLive()})};
+}
+
+/* ---------- live restaurant snapshot ----------
+   Customers, staff and orders point at each other and at furniture; the snapshot swaps those links for
+   {$:kind, n:index} tokens so the whole scene (who is seated, cooking, carrying, eating) comes back as it was. */
+const CUST_STATES = ["walkin","seated","waiting","eating","leave"], STAFF_STATES = ["idle","fetch","carry"], ORDER_STAGES = ["queue","cooking","ready","fetch","carry","served"];
+const SKIP_KEYS = {animT:1, dead:1, moving:1};
+function snapshotLive(){
+  const ords = [];
+  const addOrder = o => { if (o && o.cust && customers.includes(o.cust) && !ords.includes(o)) ords.push(o); };
+  orders.forEach(addOrder); customers.forEach(c => addOrder(c.order)); staff.forEach(e => addOrder(e.order));
+  const tok = v => {
+    if (v && typeof v === "object"){
+      let n;
+      if ((n = S.items.indexOf(v)) >= 0) return {$:"i", n};
+      if ((n = customers.indexOf(v)) >= 0) return {$:"c", n};
+      if ((n = staff.indexOf(v)) >= 0) return {$:"s", n};
+      if ((n = ords.indexOf(v)) >= 0) return {$:"o", n};
+      if (DISHES.includes(v)) return {$:"d", id:v.id};
+      if (v.cust || v.stage) return null;   // an order whose customer already left
+      if (Array.isArray(v)) return v.map(tok);
+      const out = {}; for (const k in v) out[k] = tok(v[k]); return out;
+    }
+    return typeof v === "number" && !isFinite(v) ? 0 : v;
+  };
+  const flat = o => { const out = {}; for (const k in o) if (!SKIP_KEYS[k]) out[k] = tok(o[k]); return out; };
+  return {
+    customers: customers.map(flat), staff: staff.map(flat), orders: ords.map(flat),
+    queue: orders.map(o => ords.indexOf(o)).filter(n => n >= 0),
+    links: S.items.map(it => (it.res || it.cooking) ? {res:tok(it.res || null), cooking:tok(it.cooking || null)} : 0),
+    spawnT,
+  };
+}
+function restoreLive(live, byIndex){
+  if (!live || typeof live !== "object") return;
+  const arr = v => Array.isArray(v) ? v : [];
+  const num = (v, d) => typeof v === "number" && isFinite(v) ? v : d;
+  const custs = arr(live.customers).slice(0, 60).map(() => ({})), ords = arr(live.orders).slice(0, 60).map(() => ({}));
+  const stf = staff;   // freshly hired staff of the right roles; restored state is laid over them in order
+  const ref = v => {
+    if (!v || typeof v !== "object" || typeof v.$ !== "string") return null;
+    if (v.$ === "i") return byIndex[v.n] || null;
+    if (v.$ === "c") return custs[v.n] || null;
+    if (v.$ === "s") return stf[v.n] || null;
+    if (v.$ === "o") return ords[v.n] || null;
+    if (v.$ === "d") return DISHES.find(d => d.id === v.id) || null;
+    return null;
+  };
+  const pts = v => arr(v).filter(p => Array.isArray(p) && p.length === 2 && p.every(n => typeof n === "number" && isFinite(n))).slice(0, 200).map(p => [p[0], p[1]]);
+  const dir = v => Array.isArray(v) && v.length === 2 && v.every(n => n === -1 || n === 0 || n === 1) ? [v[0], v[1]] : [0, 1];
+  const look = (v, fallback) => { if (!v || typeof v !== "object") return fallback; const o = {}; for (const k in v) if (typeof v[k] === "string") o[k] = v[k].slice(0, 40); else if (v[k] === null) o[k] = null; return Object.assign({}, fallback, o); };
+  const person = (dst, src) => {
+    dst.x = num(src.x, dst.x || 0); dst.y = num(src.y, dst.y || 0); dst.path = pts(src.path); dst.face = dir(src.face);
+    dst.walk = num(src.walk, 0); dst.t = num(src.t, 0); dst.sitK = Math.min(1, Math.max(0, num(src.sitK, 0)));
+  };
+  arr(live.customers).slice(0, 60).forEach((src, i) => {
+    if (!src || typeof src !== "object") return;
+    const c = custs[i]; person(c, src);
+    c.look = look(src.look, randLook()); c.state = CUST_STATES.includes(src.state) ? src.state : "leave";
+    c.seat = ref(src.seat); c.order = ref(src.order); c.mood = src.mood === "angry" || src.mood === "happy" ? src.mood : null;
+    c.pat = num(src.pat, 30); c.maxPat = Math.max(1, num(src.maxPat, 50)); c.rise = num(src.rise, 0);
+  });
+  arr(live.orders).slice(0, 60).forEach((src, i) => {
+    if (!src || typeof src !== "object") return;
+    const o = ords[i]; o.cust = ref(src.cust); o.dish = ref(src.dish) || DISHES[0]; o.stove = ref(src.stove);
+    o.stage = ORDER_STAGES.includes(src.stage) ? src.stage : "queue"; o.cancel = !!src.cancel; o.progress = num(src.progress, 0);
+  });
+  arr(live.staff).slice(0, stf.length).forEach((src, i) => {
+    if (!src || typeof src !== "object" || src.role !== stf[i].role) return;
+    const e = stf[i]; person(e, src);
+    e.state = STAFF_STATES.includes(src.state) ? src.state : "idle"; e.order = ref(src.order); e.stove = ref(src.stove); e.wanderT = num(src.wanderT, 2);
+    if (!e.order) e.state = "idle";
+  });
+  arr(live.links).forEach((l, i) => { const it = byIndex[i]; if (it && l && typeof l === "object"){ it.res = ref(l.res); it.cooking = ref(l.cooking); } });
+  // drop anything left dangling (an order without its customer, a customer without a seat to sit in)
+  const okOrder = o => o && o.cust && o.dish;
+  for (const o of ords) if (!okOrder(o)) o.cancel = true;
+  customers = custs.filter(c => c.look && c.state);
+  for (const c of customers){
+    if (c.order && !okOrder(c.order)) c.order = null;
+    if ((c.state === "waiting" || c.state === "eating") && !c.order){ c.state = "seated"; c.t = 1; }
+    if (c.state !== "leave" && !c.seat){ c.state = "leave"; c.path = c.x >= 0 ? [] : c.path; }
+  }
+  orders = arr(live.queue).map(n => ords[n]).filter(o => okOrder(o) && !o.cancel && customers.includes(o.cust));
+  for (const it of S.items){ if (it.res && !customers.includes(it.res)) it.res = null; if (it.cooking && !orders.includes(it.cooking)) it.cooking = null; }
+  for (const e of staff) if (e.order && !orders.includes(e.order)){ e.order = null; e.state = "idle"; }
+  for (const c of customers) if (c.state === "leave" && c.x >= 0 && !c.path.length) c.path = exitPath(c);
+  spawnT = Math.max(1, num(live.spawnT, 3));
 }
 function save(){
   if (visiting) return;   // a visited restaurant is someone else's: never saved here
@@ -1603,7 +1698,7 @@ function hud(dt){
 const netEl = document.getElementById("net"), netBox = document.getElementById("netBox"), netBtn = document.getElementById("netBtn");
 const clip = (v, n) => String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, n);
 const PENDING = "ciudad-sabrosa-pending";
-let authMode = "signup", busy = false, notice = "";
+let authMode = "signup", busy = false, notice = "", needsConfirm = false;
 const draft = {name:"Ciudad Sabrosa", owner:"", email:"", pw:""};   // keeps what the player typed across re-renders
 function starsOf(st){ let d = 0; for (const it of (st.items || [])) if (it && ITEMS[it.t]) d += ITEMS[it.t].decor; return Math.max(1, Math.min(5, 1 + Math.floor(d/15))); }
 function cloudDoc(){
@@ -1640,7 +1735,9 @@ async function pushCloud(force){
   catch(e){ cloudDirty = true; }
   finally { pushing = false; }
 }
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") pushCloud(); });
+// keep the scene exactly as it was when the tab is hidden or closed
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden"){ save(); pushCloud(); } });
+addEventListener("pagehide", () => save());
 
 function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function button(text, cls, fn){ const b = el("button", "btn" + (cls ? " " + cls : ""), text); b.type = "button"; b.onclick = fn; return b; }
@@ -1657,18 +1754,22 @@ async function loadOthers(){
   if (!netEl.hidden) renderNet();
 }
 async function run(btn, label, fn){
-  if (busy) return; busy = true; const old = btn.textContent; btn.disabled = true; btn.textContent = label; notice = "";
+  if (busy) return; busy = true; const old = btn.textContent; btn.disabled = true; btn.textContent = label; notice = ""; needsConfirm = false;
   try { await fn(); } catch(e){ notice = authError(e); }
   busy = false; btn.disabled = false; btn.textContent = old; renderNet();
 }
 function authError(e){
-  const m = String(e && (e.message || e.error_description) || "");
-  if (/invalid login/i.test(m)) return "El email o la contraseña no coinciden.";
-  if (/not confirmed/i.test(m)) return "Primero confirma tu email con el enlace que te enviamos.";
-  if (/already registered/i.test(m)) return "Ese email ya tiene cuenta. Entra con tu contraseña.";
-  if (/password/i.test(m)) return "La contraseña debe tener al menos 6 caracteres.";
-  if (/rate|too many/i.test(m)) return "Demasiados intentos. Espera un momento y vuelve a probar.";
-  return "Algo salió mal. Inténtalo de nuevo.";
+  // Supabase sends a stable `code` (e.g. email_not_confirmed) plus an English message; map the common ones, otherwise show the real message
+  const code = String(e && e.code || ""), m = String(e && (e.message || e.error_description) || "");
+  needsConfirm = code === "email_not_confirmed" || /not confirmed/i.test(m);
+  if (needsConfirm) return "Tu email todavía no está confirmado. Abre el enlace del email que te enviamos (revisa también el spam) o pide uno nuevo.";
+  if (code === "invalid_credentials" || /invalid login/i.test(m)) return "El email o la contraseña no coinciden. Si recién creaste la cuenta, revisa que hayas confirmado el email.";
+  if (code === "user_already_exists" || /already registered/i.test(m)) return "Ese email ya tiene cuenta. Entra con tu contraseña.";
+  if (code === "weak_password" || /password/i.test(m)) return "La contraseña debe tener al menos 6 caracteres.";
+  if (code === "email_address_invalid" || /invalid.*email|email.*invalid/i.test(m)) return "Ese email no es válido.";
+  if (/rate|too many/i.test(code + m)) return "Demasiados intentos. Espera un momento y vuelve a probar.";
+  if (code === "signup_disabled") return "La creación de cuentas está desactivada en Supabase.";
+  return "Algo salió mal" + (m ? `: ${m}` : ". Inténtalo de nuevo.");
 }
 function nameFields(){
   const [f1, i1] = field("Nombre del restaurante", "text", "name", {maxLength:28});
@@ -1700,7 +1801,16 @@ function renderNet(){
       } else await backend.signIn(email, pw);
     }));
     if (notice) netBox.appendChild(el("p", "note", notice));
-    netBox.appendChild(el("div", "actions")).appendChild(go);
+    const act = el("div", "actions"); netBox.appendChild(act);
+    if (needsConfirm){
+      const again = button("Reenviar email", "", () => run(again, "Enviando…", async () => {
+        if (!draft.email.trim()){ notice = "Escribe tu email arriba."; return; }
+        await backend.resendConfirmation(draft.email.trim());
+        notice = `Te enviamos otro email a ${draft.email.trim()}. Abre el enlace y después entra aquí.`;
+      }));
+      act.appendChild(again);
+    }
+    act.appendChild(go);
   } else if (!account){
     netBox.appendChild(el("p", null, "Ya entraste. Ponle nombre a tu restaurante para abrirlo a visitas."));
     const names = nameFields(); netBox.append(...names.nodes);

@@ -19,6 +19,7 @@ export function createBackend(){
     },
     async signIn(email, password){ check(await sb.auth.signInWithPassword({email, password})); },
     async signOut(){ await sb.auth.signOut(); },
+    async resendConfirmation(email){ check(await sb.auth.resend({type:"signup", email, options:{emailRedirectTo: location.origin}})); },
     async getRestaurant(id){ return toDoc(check(await sb.from("restaurants").select("*").eq("id", id).maybeSingle())); },
     async saveRestaurant(id, doc){
       check(await sb.from("restaurants").upsert({id, name:doc.name, owner:doc.owner, level:doc.level, served:doc.served, stars:doc.stars, state:doc.S, updated_at:new Date().toISOString()}));
