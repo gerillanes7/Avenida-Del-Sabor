@@ -19,16 +19,18 @@ npm run dev
 
 1. Crea una cuenta gratis en https://supabase.com y un proyecto nuevo.
 2. Ve a **SQL Editor**, pega el contenido de `supabase/schema.sql` y toca **Run**.
-3. En **Project Settings > API** copia la **Project URL** y la clave **anon public**. Ambas son públicas y pueden ir en el juego.
+3. Toca **Connect** arriba en el proyecto, o ve a **Project Settings > Data API** (Project URL) y **Project Settings > API Keys** (Publishable key). Ambas son públicas y pueden ir en el juego. Nunca uses la clave secret.
 
-### 2. Publicar el juego en Vercel
+### 2. Publicar el juego
+
+**Opción rápida, sin GitHub (Netlify Drop):** entra a https://app.netlify.com/drop, crea una cuenta gratis y arrastra la carpeta `dist` (la que viene en `ciudad-sabrosa-sitio.zip`, ya descomprimida). Netlify te da una dirección pública al instante.
+
+**Opción con Vercel:**
 
 1. Sube esta carpeta a un repositorio de GitHub.
 2. En https://vercel.com toca **Add New > Project** e importa ese repositorio. Vercel reconoce Vite solo.
-3. Antes de publicar, en **Environment Variables** agrega:
-   - `VITE_SUPABASE_URL` con la Project URL
-   - `VITE_SUPABASE_ANON_KEY` con la clave anon public
-4. Toca **Deploy**. Vercel te da una dirección como `https://ciudad-sabrosa.vercel.app`.
+3. Toca **Deploy**. Las claves del proyecto ya están en `src/backend.js`; si algún día cambias de proyecto de Supabase, agrega `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` en **Environment Variables**.
+4. Listo. Vercel te da una dirección como `https://ciudad-sabrosa.vercel.app`.
 
 ### 3. Conectar los emails de confirmación
 

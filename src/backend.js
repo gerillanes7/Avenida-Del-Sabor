@@ -1,9 +1,11 @@
 // Supabase adapter: accounts (email + password) and the public `restaurants` table.
-// Returns null when the project has no Supabase keys, so the game falls back to playing in this browser only.
+// Returns null when no Supabase keys are set, so the game falls back to playing in this browser only.
 import { createClient } from "@supabase/supabase-js";
 
 export function createBackend(){
-  const url = import.meta.env.VITE_SUPABASE_URL, key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  // the project's public URL and publishable key (safe to ship in the page); env vars override them
+  const url = import.meta.env.VITE_SUPABASE_URL || "https://rpkvgnxprtutljitypmz.supabase.co";
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_JWAmTv_uTMIKOfypUr99Pw_xuytK1sn";
   if (!url || !key) return null;
   const sb = createClient(url, key);
   const toDoc = r => r && {id:r.id, name:r.name, owner:r.owner, level:r.level, served:r.served, stars:r.stars, S:r.state};
